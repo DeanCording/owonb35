@@ -44,7 +44,7 @@ Measurments can be optionally timestamped in actual time or elapsed time since t
 
 Output format defaults to space seperated values but can also be output in Comma Seperated Values (CSV) or JSON formats.  By default, the measurement unit is output but this can be disabled for feeding applications that can only handle numeric data.
 
-By default, measurements are output in the same format as displayed by the multimeter.  When using autoranging, this can result in the measurement unit and scale changing when the multimeter changes ranges.  You can optionally fix the measurement unit to lock the measurement scale.  However, as the multimeter autoranges, it will change the resolution of the measurement value.
+By default, measurements are output in the same scale and resolution as displayed by the multimeter.  When using autoranging, this can result in the measurement scale and resolution changing when the multimeter changes ranges.  To avoid this, you can optionally lock the measurement scale.  However, as the multimeter autoranges, it will change the resolution of the measurement value.
 
 ## Interfacing
 
