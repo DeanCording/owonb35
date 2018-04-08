@@ -12,7 +12,7 @@ This client requires the [Gattlib](https://github.com/labapart/gattlib) BLE libr
 
 ## Installation
 
-Either download the compiled binary or the source code to compile your own.
+Either download the [compiled binary](https://github.com/DeanCording/owonb35/releases/download/v1.0.0/owonb35) or the source code to compile your own.
 
 Compiling is a simple 'make'.
 
