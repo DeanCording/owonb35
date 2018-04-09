@@ -30,12 +30,13 @@ owonb35 [-t|-T] [-c|-j] [-u|-m|-b|-k|-M] [<device_address>]
         -d               Timestamp measurements with date/time
         -c               Comma separated values (CSV) output
         -j               JSON output
+        -n               Scale measurements to nano units
         -u               Scale measurements to micro units
         -m               Scale measurements to milli units
         -b               Scale measurements to base units
         -k               Scale measurements to kilo units
         -M               Scale measurements to mega units
-        -n               Output just the measurement without the units or type for use with feedgnuplot
+        -x               Output just the measurement without the units or type for use with feedgnuplot
         <device_address> Address of Owon multimeter to connect
                           otherwise will connect to first meter found if not specified
 ```
@@ -66,7 +67,7 @@ The `tee` command can be used to write measurement values to a file and also pip
 
 [gnuplot](http://www.gnuplot.info) is a very flexible plotting program.  The client can feed measurements to gnuplot in realtime using [feedgnuplot](https://github.com/dkogan/feedgnuplot).
 
-`owonb35 -s -n -b | feedgnuplot --domain --lines --stream  --ymin 0 --ylabel 'Volts' --xlabel 'Seconds' --exit`
+`owonb35 -s -x -b | feedgnuplot --domain --lines --stream  --ymin 0 --ylabel 'Volts' --xlabel 'Seconds' --exit`
 
 It is best to lock the measurement unit and scale to prevent them jumping around if the multimeter autoranges during measurement.  feedgnuplot doesn't handle non-numeric data in its input, so the output of measurement units need to be disabled.  It also cannot handle measurements with less than one second resolution, which means that it can only display elapsed timestamps.  Data written to file and loaded into gnuplot can display actual timestamps.
 
@@ -74,7 +75,7 @@ It is best to lock the measurement unit and scale to prevent them jumping around
 
 MQTT is a publish/subscribe messaging system frequently used in Internet of Things networks.  It allows clients to publish data onto a network for other clients to subscribe to.  Data is usually published as single values or in JSON format.
 
-Single value - `omonb35 -n -b | mosquitto_pub -t voltage -l`
+Single value - `omonb35 -x -b | mosquitto_pub -t voltage -l`
 
 JSON format - `omonb35 -T -b -j | mosquitto_pub -t measurement -l`
 
@@ -142,6 +143,7 @@ Function
     1 1 0 0 - hFE
 
 Scale
+    0 0 1 - nano (n)
     0 1 0 - micro (u)
     0 1 1 - milli (m)
     1 0 0 - Unit
