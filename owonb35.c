@@ -127,6 +127,10 @@ void print_units(int scale, int function) {
     if (units) scale = units;
 
     switch (scale) {
+        case 1:
+            printf("n");
+            break;
+
         case 2:
             printf("u");
             break;
@@ -326,12 +330,13 @@ static void usage(char *argv[]) {
     printf("\t-d\t\t Timestamp measurements with date/time\n");
     printf("\t-c\t\t Comma separated values (CSV) output\n");
     printf("\t-j\t\t JSON output\n");
+    printf("\t-n\t\t Scale measurements to nano units\n");
     printf("\t-u\t\t Scale measurements to micro units\n");
     printf("\t-m\t\t Scale measurements to milli units\n");
     printf("\t-b\t\t Scale measurements to base units\n");
     printf("\t-k\t\t Scale measurements to kilo units\n");
     printf("\t-M\t\t Scale measurements to mega units\n");
-    printf("\t-n\t\t Output just the measurement without the units or type for use with feedgnuplot\n");
+    printf("\t-x\t\t Output just the measurement without the units or type for use with feedgnuplot\n");
     printf("\t<device_address> Address of Owon multimeter to connect\n");
     printf("\t\t\t  otherwise will connect to first meter found if not specified\n");
 
@@ -398,6 +403,10 @@ int main(int argc, char *argv[]) {
                     format = json;
                     break;
 
+                case 'n':
+                    units = 1;
+                    break;
+
                 case 'u':
                     units = 2;
                     break;
@@ -418,7 +427,7 @@ int main(int argc, char *argv[]) {
                     units = 6;
                     break;
 
-                case 'n':
+                case 'x':
                     show_units = FALSE;
                     break;
 
