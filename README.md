@@ -173,7 +173,7 @@ Max--------------\ | | | | |   20
              8 4 2 1 8 4 2 1
 ```
 
-The third number is the measurement digits as a signed magnitude binary number (msb is sign bit). It is converted to the floating point measurement value by using the number of decimal places as specified in the first number.
+The third number is the measurement digits as a [signed magnitude binary number](https://en.wikipedia.org/wiki/Signed_number_representations#Signed_magnitude_representation) (msb is sign bit). It is converted to the floating point measurement value by using the number of decimal places as specified in the first number.
 
 
 
