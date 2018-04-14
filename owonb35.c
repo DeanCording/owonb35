@@ -35,6 +35,10 @@
 
 #include <gattlib.h>
 
+#define VERSION "1.1.1"
+
+int quiet = FALSE;
+
 #define BLE_SCAN_TIMEOUT   4
 
 GMainLoop *loop;
@@ -52,6 +56,8 @@ enum {none, elapsed_sec, actual_sec, elapsed_milli, actual_milli, date} timestam
 int units = 0;
 
 int show_units = TRUE;
+
+int low_battery = FALSE;
 
 unsigned long start_time = 0;
 
@@ -208,7 +214,7 @@ void print_units(int scale, int function) {
 
 void print_type(uint16_t type) {
 
-    // Clear auto flag
+    // Clear auto  and low battery flags
     type = type & 0x33;
 
     switch (type) {
@@ -265,6 +271,17 @@ void notification_handler(const uuid_t* uuid, const uint8_t* data, size_t data_l
             measurement = (float)reading[2] / pow(10.0, decimal);
         } else {
             measurement = -1 * (float)(reading[2] & 0x7fff) / pow(10.0, decimal);
+        }
+
+        if (reading[1] & 0x08) {
+            if (!low_battery) {
+                fprintf(stderr, "LOW BATTERY\n");
+            }
+
+            if (low_battery++ > 17) low_battery = 0;
+
+        } else {
+            low_battery = FALSE;
         }
 
         switch (format) {
@@ -338,6 +355,8 @@ static void usage(char *argv[]) {
     printf("\t-M\t\t Scale measurements to mega units\n");
     printf("\t-x\t\t Output just the measurement without the units or type for use with feedgnuplot\n");
     printf("\t<device_address> Address of Owon multimeter to connect\n");
+    printf("\t-q\t\t Quiet - no status output\n");
+    printf("\t-V\t\t Display version\n");
     printf("\t\t\t  otherwise will connect to first meter found if not specified\n");
 
 }
@@ -347,7 +366,7 @@ static void ble_discovered_device(const char* addr, const char* name) {
 
     if ((name != NULL) && (strcmp(BDM, name) == 0) && (address == NULL)) {
 
-        fprintf(stderr, "Connecting to %s\n", addr);
+        if (!quiet) fprintf(stderr, "Connecting to %s\n", addr);
 
         address = malloc(18);
         strcpy(address,addr);
@@ -435,6 +454,16 @@ int main(int argc, char *argv[]) {
                     usage(argv);
                     return 0;
 
+                case 'q':
+                    quiet = TRUE;
+                    break;
+
+                case 'V':
+                    printf("%s version ", argv[0]);
+                    printf(VERSION);
+                    printf("\n");
+                    return 0;
+
                 default:
                     fprintf(stderr, "Unknown option %s\n\n", argv[argi]);
                     usage(argv);
@@ -450,7 +479,7 @@ int main(int argc, char *argv[]) {
     if (scan) {
 
         do {
-            fprintf(stderr, "Scanning...\n");
+            if (!quiet) fprintf(stderr, "Scanning...\n");
 
             ret = gattlib_adapter_open(adapter_name, &adapter);
             if (ret) {
@@ -465,12 +494,12 @@ int main(int argc, char *argv[]) {
             }
             gattlib_adapter_scan_disable(adapter);
 
-            fprintf(stderr, "Scan completed\n");
+            if (!quiet) fprintf(stderr, "Scan completed\n");
 
             gattlib_adapter_close(adapter);
 
             if (address == NULL) {
-                fprintf(stderr, "Multimeter device not found.\n");
+                if (!quiet) fprintf(stderr, "Multimeter device not found.\n");
                 sleep(2);
             }
 
@@ -505,6 +534,6 @@ int main(int argc, char *argv[]) {
 
     g_main_loop_unref(loop);
     gattlib_disconnect(connection);
-    fprintf(stderr,"Done\n");
+    if (!quiet) fprintf(stderr,"Done\n");
     return 0;
 }
