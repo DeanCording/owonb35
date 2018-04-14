@@ -35,7 +35,7 @@
 
 #include <gattlib.h>
 
-#define VERSION "1.1.1"
+#define VERSION "1.2.0"
 
 int quiet = FALSE;
 
@@ -44,11 +44,24 @@ int quiet = FALSE;
 GMainLoop *loop;
 
 // Measurement UUID
+uuid_t g_command_uuid = CREATE_UUID16(0xfff1);
 const uuid_t g_measurement_uuid = CREATE_UUID16(0xfff4);
+
 
 char *address = NULL;
 
 const char BDM[] = "BDM";
+
+#define DATE_CMD    "*DATe"
+#define RECORD_CMD  "*RECOrd,"
+#define READLEN_CMD "*READlen?"
+#define READ_CMD    "*READ1?"
+
+#define MAX_MEASUREMENTS 10000
+
+uint32_t interval = 0;
+uint32_t num_measurements = 0;
+
 
 enum {space, csv, json} format = space;
 
@@ -214,27 +227,11 @@ void print_units(int scale, int function) {
 
 void print_type(uint16_t type) {
 
-    // Clear auto  and low battery flags
-    type = type & 0x33;
+    if (type & 0x02) printf("Δ ");
+    if (type & 0x10) printf("min");
+    if (type & 0x20) printf("max");
+    if (type & 0x01) printf("hold");
 
-    switch (type) {
-        case 1:
-            printf("hold");
-            break;
-
-        case 2:
-            printf("Δ");
-            break;
-
-        case 16:
-            printf("min");
-            break;
-
-        case 32:
-            printf("max");
-            break;
-
-    }
 }
 
 
@@ -338,7 +335,10 @@ void notification_handler(const uuid_t* uuid, const uint8_t* data, size_t data_l
 }
 
 static void usage(char *argv[]) {
-    printf("%s [-t|-T] [-c|-j] [-u|-m|-b|-k|-M] [<device_address>]\n", argv[0]);
+    printf("%s [-s|-S|-t|-T|-d] [-c|-j] [-n|-u|-m|-b|-k|-M] [-x] [-R] [-q] [<device_address>]\n", argv[0]);
+    printf("%s -R <seconds per measurement> <number of measurements> [<device_address>]\n", argv[0]);
+    printf("%s -h\n", argv[0]);
+    printf("%s -V\n", argv[0]);
     printf("\n\tReceives measurement data from Owon B35+/B35T+ digital multimeters using bluetooth.\n\n");
     printf("\t-s\t\t Timestamp measurements in elapsed seconds from first reading\n");
     printf("\t-S\t\t Timestamp measurements in seconds\n");
@@ -356,6 +356,7 @@ static void usage(char *argv[]) {
     printf("\t-x\t\t Output just the measurement without the units or type for use with feedgnuplot\n");
     printf("\t<device_address> Address of Owon multimeter to connect\n");
     printf("\t-q\t\t Quiet - no status output\n");
+    printf("\t-h\t\t Display this help\n");
     printf("\t-V\t\t Display version\n");
     printf("\t\t\t  otherwise will connect to first meter found if not specified\n");
 
@@ -391,88 +392,111 @@ int main(int argc, char *argv[]) {
     void* adapter = NULL;
 
 
-    for (argi = 1; argi < argc; argi++) {
-        if (argv[argi][0] == '-') {
-            switch (argv[argi][1]) {
-                case 's':
-                    timestamp = elapsed_sec;
-                    break;
+    if ((argc > 3) && (argv[1][0] == '-') && (argv[1][1] == 'R')) {
 
-                case 'S':
-                    timestamp = actual_sec;
-                    break;
+        interval = strtoul(argv[2], NULL, 0);
+        if (interval < 1) {
+            fprintf(stderr, "Measurement interval must be 1 or more seconds.\n");
+            return 1;
+        }
 
-                case 't':
-                    timestamp = elapsed_milli;
-                    break;
 
-                case 'T':
-                    timestamp = actual_milli;
-                    break;
+        num_measurements = strtoul(argv[3], NULL, 0);
+        if ((num_measurements < 1) || (num_measurements > MAX_MEASUREMENTS)) {
+            fprintf(stderr, "Number of measurements must be between 0 and %d.\n", MAX_MEASUREMENTS);
+            return 1;
+        }
 
-                case 'd':
-                    timestamp = date;
-                    break;
+        if (argc == 5) {
+printf("Huh\n");
+            address = argv[4];
+            scan = FALSE;
+        }
+    } else {
 
-                case 'c':
-                    format = csv;
-                    break;
+        for (argi = 1; argi < argc; argi++) {
+            if (argv[argi][0] == '-') {
+                switch (argv[argi][1]) {
+                    case 's':
+                        timestamp = elapsed_sec;
+                        break;
 
-                case 'j':
-                    format = json;
-                    break;
+                    case 'S':
+                        timestamp = actual_sec;
+                        break;
 
-                case 'n':
-                    units = 1;
-                    break;
+                    case 't':
+                        timestamp = elapsed_milli;
+                        break;
 
-                case 'u':
-                    units = 2;
-                    break;
+                    case 'T':
+                        timestamp = actual_milli;
+                        break;
 
-                case 'm':
-                    units = 3;
-                    break;
+                    case 'd':
+                        timestamp = date;
+                        break;
 
-                case 'b':
-                    units = 4;
-                    break;
+                    case 'c':
+                        format = csv;
+                        break;
 
-                case 'k':
-                    units = 5;
-                    break;
+                    case 'j':
+                        format = json;
+                        break;
 
-                case 'M':
-                    units = 6;
-                    break;
+                    case 'n':
+                        units = 1;
+                        break;
 
-                case 'x':
-                    show_units = FALSE;
-                    break;
+                    case 'u':
+                        units = 2;
+                        break;
 
-                case 'h':
-                    usage(argv);
-                    return 0;
+                    case 'm':
+                        units = 3;
+                        break;
 
-                case 'q':
-                    quiet = TRUE;
-                    break;
+                    case 'b':
+                        units = 4;
+                        break;
 
-                case 'V':
-                    printf("%s version ", argv[0]);
-                    printf(VERSION);
-                    printf("\n");
-                    return 0;
+                    case 'k':
+                        units = 5;
+                        break;
 
-                default:
-                    fprintf(stderr, "Unknown option %s\n\n", argv[argi]);
-                    usage(argv);
-                    return 1;
+                    case 'M':
+                        units = 6;
+                        break;
 
+                    case 'x':
+                        show_units = FALSE;
+                        break;
+
+                    case 'h':
+                        usage(argv);
+                        return 0;
+
+                    case 'q':
+                        quiet = TRUE;
+                        break;
+
+                    case 'V':
+                        printf("%s version ", argv[0]);
+                        printf(VERSION);
+                        printf("\n");
+                        return 0;
+
+                    default:
+                        fprintf(stderr, "Unknown option %s\n\n", argv[argi]);
+                        usage(argv);
+                        return 1;
+
+                }
+            } else {
+                address = argv[argi];
+                scan = FALSE;
             }
-        } else {
-            address = argv[argi];
-            scan = 0;
         }
     }
 
@@ -494,8 +518,6 @@ int main(int argc, char *argv[]) {
             }
             gattlib_adapter_scan_disable(adapter);
 
-            if (!quiet) fprintf(stderr, "Scan completed\n");
-
             gattlib_adapter_close(adapter);
 
             if (address == NULL) {
@@ -508,6 +530,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (address == NULL) {
+        usage(argv);
         return 1;
     }
 
@@ -517,23 +540,73 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    gattlib_register_notification(connection, notification_handler, NULL);
+    if (interval) {
 
-    ret = gattlib_notification_start(connection, &g_measurement_uuid);
-    if (ret) {
-        fprintf(stderr, "Fail to start listener.\n");
-        return 1;
+        char *index;
+
+        uint8_t buffer[16];
+
+        struct tm *date;
+        time_t now;
+
+        memset(buffer, 0, sizeof(buffer));
+
+        index = stpcpy((char *)buffer, DATE_CMD);
+
+        now = time(NULL);
+        date = localtime(&now);
+
+        index[0] = (uint8_t)(date->tm_year/100);
+        index[1] = (uint8_t)(date->tm_year - date->tm_year/100);
+        index[2] = (uint8_t)(date->tm_mon + 1);
+        index[3] = (uint8_t)(date->tm_mday);
+        index[4] = (uint8_t)(date->tm_hour);
+        index[5] = (uint8_t)(date->tm_min);
+        index[6] = (uint8_t)(date->tm_sec);
+
+		ret = gattlib_write_char_by_uuid(connection, &g_command_uuid, buffer, sizeof(buffer));
+        if (ret) {
+            fprintf(stderr, "Fail to write date.\n");
+            return 1;
+        }
+
+        memset(buffer, 0, sizeof(buffer));
+
+        index = stpcpy((char *)buffer, RECORD_CMD);
+
+        ((uint32_t *)index)[0] = interval;
+        ((uint32_t *)index)[1] = num_measurements;
+printf("num_measurements %u\n", num_measurements);
+		ret = gattlib_write_char_by_uuid(connection, &g_command_uuid, buffer, sizeof(buffer));
+        if (ret) {
+            fprintf(stderr, "Fail to write record command.\n");
+            return 1;
+        }
+
+        if (!quiet) fprintf(stderr, "Recording started\n");
+
+    } else {
+
+        gattlib_register_notification(connection, notification_handler, NULL);
+
+        ret = gattlib_notification_start(connection, &g_measurement_uuid);
+        if (ret) {
+            fprintf(stderr, "Fail to start listener.\n");
+            return 1;
+        }
+
+
+        loop = g_main_loop_new(NULL, 0);
+
+        signal(SIGINT, signal_handler);
+
+        g_main_loop_run(loop);
+
+        g_main_loop_unref(loop);
+
     }
 
-
-    loop = g_main_loop_new(NULL, 0);
-
-    signal(SIGINT, signal_handler);
-
-    g_main_loop_run(loop);
-
-    g_main_loop_unref(loop);
     gattlib_disconnect(connection);
-    if (!quiet) fprintf(stderr,"Done\n");
+    if (!quiet) fprintf(stderr,"Disconnected\n");
     return 0;
 }
