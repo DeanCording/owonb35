@@ -162,12 +162,13 @@ Decimal Places
 
 The second number bit encodes the reading type.
 ```
-Hold------------------------   01/05 Autorange
-Delta--------------------- |   02/06 Autorange
-Autorange--------------- | |   04
-Min-----------------   | | |   10
-Max--------------- |   | | |   20
-                 | |   | | |
+Hold-----------------------\   01/05 Autorange
+Delta--------------------\ |   02/06 Autorange
+Autorange--------------\ | |   04
+Low Battery----------\ | | |
+Min----------------\ | | | |   10
+Max--------------\ | | | | |   20
+                 | | | | | |
    00000000  X X X X X X X X
              8 4 2 1 8 4 2 1
 ```
