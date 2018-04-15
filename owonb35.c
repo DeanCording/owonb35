@@ -5,6 +5,7 @@
  *
  *  Copyright (C) 2018  Dean Cording <dean@cording.id.au>
  *
+ *  https://github.com/DeanCording/owonb35
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -35,11 +36,11 @@
 
 #include <gattlib.h>
 
-#define VERSION "1.2.0"
+#define VERSION "1.3.0alpha"
 
-int quiet = FALSE;
+_Bool quiet = FALSE;
 
-#define BLE_SCAN_TIMEOUT   4
+#define BLE_SCAN_TIMEOUT   3
 
 GMainLoop *loop;
 
@@ -62,25 +63,36 @@ const char BDM[] = "BDM";
 uint32_t interval = 0;
 uint32_t num_measurements = 0;
 
+_Bool offline = FALSE;
+uint16_t offline_function = 0;
+time_t offline_time = 0;
+uint32_t offline_increment;
+
 
 enum {space, csv, json} format = space;
 
 enum {none, elapsed_sec, actual_sec, elapsed_milli, actual_milli, date} timestamp = none;
 int units = 0;
 
-int show_units = TRUE;
+_Bool show_units = TRUE;
 
 int low_battery = FALSE;
 
 unsigned long start_time = 0;
 
 void print_timestamp() {
+
     struct timeval now;
     char date_now[30];
 
     if (timestamp == none) return;
 
-    gettimeofday(&now,NULL);
+    if (offline_time) {
+        now.tv_sec = offline_time;
+        now.tv_usec = 0;
+    } else {
+        gettimeofday(&now,NULL);
+    }
 
     switch (timestamp) {
         case none:
@@ -236,115 +248,169 @@ void print_type(uint16_t type) {
 
 
 
-
-void notification_handler(const uuid_t* uuid, const uint8_t* data, size_t data_length, void* user_data) {
-    int i;
-
-    uint16_t* reading;
+void display_reading(uint16_t* reading) {
 
     int function, scale, decimal;
 
     float measurement;
 
-    if ((data_length !=6) && (data[1] < 240)) {
+    function = (reading[0] >> 6) & 0x0f;
+    scale = (reading[0] >> 3) & 0x07;
+    decimal = reading[0] & 0x07;
+
+    if (reading[2] < 0x7fff) {
+        measurement = (float)reading[2] / pow(10.0, decimal);
+    } else {
+        measurement = -1 * (float)(reading[2] & 0x7fff) / pow(10.0, decimal);
+    }
+
+    if (reading[1] & 0x08) {
+        if (!low_battery) {
+            fprintf(stderr, "LOW BATTERY\n");
+        }
+
+        if (low_battery++ > 17) low_battery = 0;
+
+    } else {
+        low_battery = FALSE;
+    }
+
+    switch (format) {
+        case space:
+        case csv:
+
+            if (timestamp) {
+                print_timestamp();
+                printf("%c", (format?',':' '));
+            }
+
+            print_measurement(measurement, decimal, scale);
+
+            if (show_units) {
+                printf("%c", (format?',':' '));
+                print_units(scale, function);
+                printf("%c", (format?',':' '));
+                print_type(reading[1]);
+            }
+            printf("\n");
+
+            break;
+
+        case json:
+
+            printf("{");
+
+            if (timestamp) {
+                printf("\"timestamp\":");
+                if (timestamp == date) printf("\"");
+                print_timestamp();
+                if (timestamp == date) printf("\"");
+                printf(", ");
+            }
+
+            printf("\"measurement\":");
+            print_measurement(measurement, decimal, scale);
+
+            if (show_units) {
+                printf(", \"units\":\"");
+                print_units(scale, function);
+                printf("\", \"type\":\"");
+                print_type(reading[1]);
+                printf("\"");
+            }
+            printf(" }\n");
+
+            break;
+
+    }
+
+    fflush(stdout);
+}
+
+
+void notification_handler(const uuid_t* uuid, const uint8_t* data, size_t data_length, void* user_data) {
+
+    uint16_t reading[3];
+    int index;
+
+    if (offline) {
+        if (!offline_function && (data_length < 20)) return;
+
+        if (!offline_function && (data[0] == 0xff)) return;  // skip lead-in
+
+        index = 0;
+
+        if (!offline_function) {
+            // Read header
+
+            struct tm brokentime;
+
+            brokentime.tm_year = data[0] * 100 + data[1];
+            brokentime.tm_mon = data[2] - 1;
+            brokentime.tm_mday = data[3];
+            brokentime.tm_hour = data[4];
+            brokentime.tm_min = data[5];
+            brokentime.tm_sec = data[6];
+
+            offline_time = mktime(&brokentime);
+
+            offline_increment = *((uint32_t *)(data+8));
+
+            offline_function = *((uint16_t *)(data+16));
+
+            index = 18;
+
+        }
+
+        reading[0] = offline_function;
+        reading[1] = 0;
+
+        for(;index < 20; index+=2) {
+
+            if (*((uint16_t *)(data+index)) == 0xffff) {
+                g_main_loop_quit(loop);
+                return;
+            }
+
+            reading[2] = *((uint16_t *)(data+index));
+
+            display_reading(reading);
+
+            offline_time += offline_increment;
+        }
+
+    } else if ((data_length == 6) && (data[1] >= 0xf0)) {
+
+        // Realtime measurement packet
+
+        display_reading((uint16_t*)data);
+
+    } else {
 
         fprintf(stderr, "Unrecognized packet: ");
 
-        for (i = 0; i < data_length; i++) {
+        for (int i = 0; i < data_length; i++) {
             fprintf(stderr, "%02x ", data[i]);
         }
 
         fprintf(stderr, "\n");
 
-    } else {
-
-        reading = (uint16_t*)data;
-
-        function = (reading[0] >> 6) & 0x0f;
-        scale = (reading[0] >> 3) & 0x07;
-        decimal = reading[0] & 0x07;
-
-        if (reading[2] < 0x7fff) {
-            measurement = (float)reading[2] / pow(10.0, decimal);
-        } else {
-            measurement = -1 * (float)(reading[2] & 0x7fff) / pow(10.0, decimal);
-        }
-
-        if (reading[1] & 0x08) {
-            if (!low_battery) {
-                fprintf(stderr, "LOW BATTERY\n");
-            }
-
-            if (low_battery++ > 17) low_battery = 0;
-
-        } else {
-            low_battery = FALSE;
-        }
-
-        switch (format) {
-            case space:
-            case csv:
-
-                if (timestamp) {
-                    print_timestamp();
-                    printf("%c", (format?',':' '));
-                }
-
-                print_measurement(measurement, decimal, scale);
-
-                if (show_units) {
-                    printf("%c", (format?',':' '));
-                    print_units(scale, function);
-                    printf("%c", (format?',':' '));
-                    print_type(reading[1]);
-                }
-                printf("\n");
-
-                break;
-
-            case json:
-
-                printf("{");
-
-                if (timestamp) {
-                    printf("\"timestamp\":");
-                    if (timestamp == date) printf("\"");
-                    print_timestamp();
-                    if (timestamp == date) printf("\"");
-                    printf(", ");
-                }
-
-                printf("\"measurement\":");
-                print_measurement(measurement, decimal, scale);
-
-                if (show_units) {
-                    printf(", \"units\":\"");
-                    print_units(scale, function);
-                    printf("\", \"type\":\"");
-                    print_type(reading[1]);
-                    printf("\"");
-                }
-                printf(" }\n");
-
-                break;
-
-        }
-
-        fflush(stdout);
     }
+
+
 }
 
 static void usage(char *argv[]) {
-    printf("%s [-s|-S|-t|-T|-d] [-c|-j] [-n|-u|-m|-b|-k|-M] [-x] [-R] [-q] [<device_address>]\n", argv[0]);
+    printf("%s [-s|-S|-t|-T|-d] [-c|-j] [-n|-u|-m|-b|-k|-M] [-x] [-r] [-q] [-h|-V] [<device_address>]\n", argv[0]);
+    printf("\tMeasurement collection\n\n");
     printf("%s -R <seconds per measurement> <number of measurements> [<device_address>]\n", argv[0]);
-    printf("%s -h\n", argv[0]);
-    printf("%s -V\n", argv[0]);
-    printf("\n\tReceives measurement data from Owon B35+/B35T+ digital multimeters using bluetooth.\n\n");
+    printf("\tStart offline measurement recording\n\n");
+    printf("\tClient for Owon B35/B35+/B35T+ digital multimeters using bluetooth.\n\n");
     printf("\t-s\t\t Timestamp measurements in elapsed seconds from first reading\n");
-    printf("\t-S\t\t Timestamp measurements in seconds\n");
+    printf("\t-S\t\t Timestamp measurements in Unix epoch seconds\n");
     printf("\t-t\t\t Timestamp measurements in elapsed milliseconds from first reading\n");
-    printf("\t-T\t\t Timestamp measurements in milliseconds\n");
-    printf("\t-d\t\t Timestamp measurements with date/time\n");
+    printf("\t-T\t\t Timestamp measurements in Javascript epoch milliseconds\n");
+    printf("\t-d\t\t Timestamp measurements with ISO date/time\n");
     printf("\t-c\t\t Comma separated values (CSV) output\n");
     printf("\t-j\t\t JSON output\n");
     printf("\t-n\t\t Scale measurements to nano units\n");
@@ -353,11 +419,13 @@ static void usage(char *argv[]) {
     printf("\t-b\t\t Scale measurements to base units\n");
     printf("\t-k\t\t Scale measurements to kilo units\n");
     printf("\t-M\t\t Scale measurements to mega units\n");
-    printf("\t-x\t\t Output just the measurement without the units or type for use with feedgnuplot\n");
-    printf("\t<device_address> Address of Owon multimeter to connect\n");
+    printf("\t-x\t\t Output measurement value without units or type for use with feedgnuplot\n");
+    printf("\t-R\t\t Start offline measurement recording\n");
+    printf("\t-r\t\t Download offline measurement recording\n");
     printf("\t-q\t\t Quiet - no status output\n");
-    printf("\t-h\t\t Display this help\n");
-    printf("\t-V\t\t Display version\n");
+    printf("\t-h\t\t Display this help and exit\n");
+    printf("\t-V\t\t Display version and exit\n");
+    printf("\t<device_address> Address of Owon multimeter to connect\n");
     printf("\t\t\t  otherwise will connect to first meter found if not specified\n");
 
 }
@@ -384,7 +452,7 @@ int main(int argc, char *argv[]) {
     int ret;
     gatt_connection_t* connection;
 
-    int scan = 1;
+    _Bool scan = TRUE;
 
     int argi;
 
@@ -408,7 +476,6 @@ int main(int argc, char *argv[]) {
         }
 
         if (argc == 5) {
-printf("Huh\n");
             address = argv[4];
             scan = FALSE;
         }
@@ -471,6 +538,10 @@ printf("Huh\n");
 
                     case 'x':
                         show_units = FALSE;
+                        break;
+
+                    case 'r':
+                        offline = TRUE;
                         break;
 
                     case 'h':
@@ -576,10 +647,9 @@ printf("Huh\n");
 
         ((uint32_t *)index)[0] = interval;
         ((uint32_t *)index)[1] = num_measurements;
-printf("num_measurements %u\n", num_measurements);
 		ret = gattlib_write_char_by_uuid(connection, &g_command_uuid, buffer, sizeof(buffer));
         if (ret) {
-            fprintf(stderr, "Fail to write record command.\n");
+            fprintf(stderr, "Failed to write record command.\n");
             return 1;
         }
 
@@ -595,6 +665,45 @@ printf("num_measurements %u\n", num_measurements);
             return 1;
         }
 
+        if (offline) {
+            uint8_t buffer[16];
+            size_t len;
+
+            memset(buffer, 0, sizeof(buffer));
+
+            stpcpy((char *)buffer, READLEN_CMD);
+
+            ret = gattlib_write_char_by_uuid(connection, &g_command_uuid, buffer, sizeof(buffer));
+            if (ret) {
+                fprintf(stderr, "Fail to request length of offline recorded measurements.\n");
+                return 1;
+            }
+
+
+            len = sizeof(buffer);
+            ret = gattlib_read_char_by_uuid(connection, &g_command_uuid, buffer, &len);
+            if (ret) {
+                fprintf(stderr, "Failed to read length of offline recorded measurements.\n");
+                return 1;
+            }
+
+            if (*((uint32_t *)buffer) == 0) {
+                fprintf(stderr, "No offline recorded measurements available.\n");
+            } else {
+                if (!quiet) fprintf(stderr, "Downloading %u offline recorded measurements.\n",
+                    (*((uint32_t *)buffer)-2)/2);
+            }
+
+            memset(buffer, 0, sizeof(buffer));
+
+            stpcpy((char *)buffer, READ_CMD);
+
+            ret = gattlib_write_char_by_uuid(connection, &g_command_uuid, buffer, sizeof(buffer));
+            if (ret) {
+                fprintf(stderr, "Failed to request offline recorded measurements.\n");
+                return 1;
+            }
+        }
 
         loop = g_main_loop_new(NULL, 0);
 
