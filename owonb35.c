@@ -33,10 +33,11 @@
 #include <sys/time.h>
 #include <time.h>
 #include <signal.h>
+#include <termios.h>
 
 #include <gattlib.h>
 
-#define VERSION "1.3.0alpha"
+#define VERSION "1.3.0"
 
 _Bool quiet = FALSE;
 
@@ -44,15 +45,16 @@ _Bool quiet = FALSE;
 
 GMainLoop *loop;
 
-// Measurement UUID
+// BLE GATT UUID
 uuid_t g_command_uuid = CREATE_UUID16(0xfff1);
+uuid_t g_control_uuid = CREATE_UUID16(0xfff3);
 const uuid_t g_measurement_uuid = CREATE_UUID16(0xfff4);
 
-
+gatt_connection_t* connection;
 char *address = NULL;
-
 const char BDM[] = "BDM";
 
+// Offline recording
 #define DATE_CMD    "*DATe"
 #define RECORD_CMD  "*RECOrd,"
 #define READLEN_CMD "*READlen?"
@@ -66,9 +68,26 @@ uint32_t num_measurements = 0;
 _Bool offline = FALSE;
 uint16_t offline_function = 0;
 time_t offline_time = 0;
-uint32_t offline_increment;
+uint32_t offline_interval;
 
 
+// Interactive controls
+_Bool interactive = FALSE;
+struct termios orig_termios;
+
+#define SELECT          0x0101
+#define AUTO            0x0002
+#define RANGE           0x0102
+#define LIGHT           0x0003
+#define HOLD            0x0103
+#define BLUETOOTH_OFF   0x0004
+#define RELATIVE        0x0104
+#define HZ              0x0105
+#define NORMAL          0x0006
+#define MIN_MAX         0x0106
+
+
+// Output options
 enum {space, csv, json} format = space;
 
 enum {none, elapsed_sec, actual_sec, elapsed_milli, actual_milli, date} timestamp = none;
@@ -80,6 +99,8 @@ int low_battery = FALSE;
 
 unsigned long start_time = 0;
 
+
+// Outputs the measurement timestamp
 void print_timestamp() {
 
     struct timeval now;
@@ -133,6 +154,8 @@ void print_timestamp() {
 
 }
 
+
+// Outputs the measurement value
 void print_measurement(float measurement, int decimal, int scale) {
 
     if (decimal > 3) {
@@ -153,6 +176,7 @@ void print_measurement(float measurement, int decimal, int scale) {
 
 }
 
+// Outputs the measurement units
 void print_units(int scale, int function) {
 
     if (units) scale = units;
@@ -237,6 +261,7 @@ void print_units(int scale, int function) {
 
 }
 
+// Outputs the measurement type
 void print_type(uint16_t type) {
 
     if (type & 0x02) printf("Δ ");
@@ -246,24 +271,27 @@ void print_type(uint16_t type) {
 
 }
 
-
-
+// Outputs the measurement
 void display_reading(uint16_t* reading) {
 
     int function, scale, decimal;
 
     float measurement;
 
+    // Extract data items from first number
     function = (reading[0] >> 6) & 0x0f;
     scale = (reading[0] >> 3) & 0x07;
     decimal = reading[0] & 0x07;
 
+    // Extract and convert measurement value
     if (reading[2] < 0x7fff) {
         measurement = (float)reading[2] / pow(10.0, decimal);
     } else {
         measurement = -1 * (float)(reading[2] & 0x7fff) / pow(10.0, decimal);
     }
 
+
+    // Check for low battery condition
     if (reading[1] & 0x08) {
         if (!low_battery) {
             fprintf(stderr, "LOW BATTERY\n");
@@ -274,6 +302,7 @@ void display_reading(uint16_t* reading) {
     } else {
         low_battery = FALSE;
     }
+
 
     switch (format) {
         case space:
@@ -324,16 +353,20 @@ void display_reading(uint16_t* reading) {
 
     }
 
+    // Flush output for realtime displays
     fflush(stdout);
 }
 
 
+// Handler for BLE notification events
 void notification_handler(const uuid_t* uuid, const uint8_t* data, size_t data_length, void* user_data) {
 
     uint16_t reading[3];
     int index;
 
     if (offline) {
+        // Process offline recording dump packet
+
         if (!offline_function && (data_length < 20)) return;
 
         if (!offline_function && (data[0] == 0xff)) return;  // skip lead-in
@@ -343,6 +376,7 @@ void notification_handler(const uuid_t* uuid, const uint8_t* data, size_t data_l
         if (!offline_function) {
             // Read header
 
+            // Extract recording start timestamp
             struct tm brokentime;
 
             brokentime.tm_year = data[0] * 100 + data[1];
@@ -354,8 +388,10 @@ void notification_handler(const uuid_t* uuid, const uint8_t* data, size_t data_l
 
             offline_time = mktime(&brokentime);
 
-            offline_increment = *((uint32_t *)(data+8));
+            // Extract measurement interval
+            offline_interval = *((uint32_t *)(data+8));
 
+            // Extract measurement function and units
             offline_function = *((uint16_t *)(data+16));
 
             index = 18;
@@ -376,7 +412,7 @@ void notification_handler(const uuid_t* uuid, const uint8_t* data, size_t data_l
 
             display_reading(reading);
 
-            offline_time += offline_increment;
+            offline_time += offline_interval;
         }
 
     } else if ((data_length == 6) && (data[1] >= 0xf0)) {
@@ -406,6 +442,7 @@ static void usage(char *argv[]) {
     printf("%s -R <seconds per measurement> <number of measurements> [<device_address>]\n", argv[0]);
     printf("\tStart offline measurement recording\n\n");
     printf("\tClient for Owon B35/B35+/B35T+ digital multimeters using bluetooth.\n\n");
+    printf("\t-i\t\t Interactive remote control\n");
     printf("\t-s\t\t Timestamp measurements in elapsed seconds from first reading\n");
     printf("\t-S\t\t Timestamp measurements in Unix epoch seconds\n");
     printf("\t-t\t\t Timestamp measurements in elapsed milliseconds from first reading\n");
@@ -427,10 +464,91 @@ static void usage(char *argv[]) {
     printf("\t-V\t\t Display version and exit\n");
     printf("\t<device_address> Address of Owon multimeter to connect\n");
     printf("\t\t\t  otherwise will connect to first meter found if not specified\n");
+    printf("\n\n\tInteractive controls:\n");
+    printf("\t\ts - Select\n");
+    printf("\t\ta - Auto\n");
+    printf("\t\tr - Range\n");
+    printf("\t\tl - Backlight\n");
+    printf("\t\th - Hold\n");
+    printf("\t\tb - Turn off Bluetooth\n");
+    printf("\t\td - Delta (Relative)\n");
+    printf("\t\tf - Fequency Hz/Duty\n");
+    printf("\t\tm - Min/Max\n");
+    printf("\t\tn - Normal display\n");
 
 }
 
+// Event handler for interactive controls
+static gboolean interactive_read(GIOChannel *chan, GIOCondition cond,
+							gpointer user_data) {
 
+    gchar buffer;
+    gsize chars_read;
+
+    uint16_t control;
+
+	if (cond & (G_IO_HUP | G_IO_ERR | G_IO_NVAL)) {
+		g_io_channel_unref(chan);
+		return FALSE;
+	}
+
+	g_io_channel_read_chars(chan, &buffer, 1, &chars_read, NULL);
+
+    switch (buffer) {
+        case 's':
+            control = SELECT;
+            break;
+
+        case 'a':
+            control = AUTO;
+            break;
+
+        case 'r':
+            control = RANGE;
+            break;
+
+        case 'l':
+            control = LIGHT;
+            break;
+
+        case 'h':
+            control = HOLD;
+            break;
+
+        case 'b':
+            control = BLUETOOTH_OFF;
+            break;
+
+        case 'd':
+            control = RELATIVE;
+            break;
+
+        case 'f':
+            control = HZ;
+            break;
+
+        case 'm':
+            control = MIN_MAX;
+            break;
+
+        case 'n':
+            control = NORMAL;
+            break;
+
+        default:
+            return TRUE;
+    }
+
+
+    if (gattlib_write_char_by_uuid(connection, &g_control_uuid, &control, sizeof(control))) {
+        fprintf(stderr, "Failed to send control.\n");
+    }
+
+
+	return TRUE;
+}
+
+// Handler for new device discovery
 static void ble_discovered_device(const char* addr, const char* name) {
 
     if ((name != NULL) && (strcmp(BDM, name) == 0) && (address == NULL)) {
@@ -443,6 +561,7 @@ static void ble_discovered_device(const char* addr, const char* name) {
 
 }
 
+// SIGINT handler for clean shutdown
 void signal_handler(int signal){
 
     g_main_loop_quit(loop);
@@ -450,11 +569,9 @@ void signal_handler(int signal){
 
 int main(int argc, char *argv[]) {
     int ret;
-    gatt_connection_t* connection;
+    GIOChannel *pchan;
 
     _Bool scan = TRUE;
-
-    int argi;
 
     const char* adapter_name = NULL;
     void* adapter = NULL;
@@ -462,6 +579,7 @@ int main(int argc, char *argv[]) {
 
     if ((argc > 3) && (argv[1][0] == '-') && (argv[1][1] == 'R')) {
 
+        // Offline recording
         interval = strtoul(argv[2], NULL, 0);
         if (interval < 1) {
             fprintf(stderr, "Measurement interval must be 1 or more seconds.\n");
@@ -481,7 +599,7 @@ int main(int argc, char *argv[]) {
         }
     } else {
 
-        for (argi = 1; argi < argc; argi++) {
+        for (int argi = 1; argi < argc; argi++) {
             if (argv[argi][0] == '-') {
                 switch (argv[argi][1]) {
                     case 's':
@@ -552,6 +670,10 @@ int main(int argc, char *argv[]) {
                         quiet = TRUE;
                         break;
 
+                    case 'i':
+                        interactive = TRUE;
+                        break;
+
                     case 'V':
                         printf("%s version ", argv[0]);
                         printf(VERSION);
@@ -613,6 +735,8 @@ int main(int argc, char *argv[]) {
 
     if (interval) {
 
+        // Start offline recording
+
         char *index;
 
         uint8_t buffer[16];
@@ -622,6 +746,7 @@ int main(int argc, char *argv[]) {
 
         memset(buffer, 0, sizeof(buffer));
 
+        // Send current date/time
         index = stpcpy((char *)buffer, DATE_CMD);
 
         now = time(NULL);
@@ -641,6 +766,7 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
+        //  Send recording parameters
         memset(buffer, 0, sizeof(buffer));
 
         index = stpcpy((char *)buffer, RECORD_CMD);
@@ -666,9 +792,11 @@ int main(int argc, char *argv[]) {
         }
 
         if (offline) {
+            // Request offline recording download
             uint8_t buffer[16];
             size_t len;
 
+            // Check number of measurements available
             memset(buffer, 0, sizeof(buffer));
 
             stpcpy((char *)buffer, READLEN_CMD);
@@ -694,6 +822,7 @@ int main(int argc, char *argv[]) {
                     (*((uint32_t *)buffer)-2)/2);
             }
 
+            // Request measurement data
             memset(buffer, 0, sizeof(buffer));
 
             stpcpy((char *)buffer, READ_CMD);
@@ -709,13 +838,31 @@ int main(int argc, char *argv[]) {
 
         signal(SIGINT, signal_handler);
 
+        if (interactive) {
+
+            // Disable terminal buffering
+            struct termios new_termios;
+
+            tcgetattr(0, &orig_termios);
+            memcpy(&new_termios, &orig_termios, sizeof(new_termios));
+            new_termios.c_lflag &= ~(ECHO | ECHONL |ICANON);
+
+            tcsetattr(0, TCSANOW, &new_termios);
+
+            // Set up input event handler
+            pchan = g_io_channel_unix_new(fileno(stdin));
+            g_io_channel_set_close_on_unref(pchan, TRUE);
+            gint events = G_IO_IN | G_IO_ERR | G_IO_HUP | G_IO_NVAL;
+            g_io_add_watch(pchan, events, interactive_read, NULL);
+        }
+
         g_main_loop_run(loop);
 
         g_main_loop_unref(loop);
-
     }
 
     gattlib_disconnect(connection);
     if (!quiet) fprintf(stderr,"Disconnected\n");
+    tcsetattr(0, TCSANOW, &orig_termios);
     return 0;
 }
