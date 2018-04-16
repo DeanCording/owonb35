@@ -21,13 +21,17 @@ Compiling is a simple 'make'.
 The client is designed to be a simple receiver of measurement data that outputs in formats that can be piped into other tools for processing or display.
 
 ```
-owonb35 [-t|-T] [-c|-j] [-u|-m|-b|-k|-M] [<device_address>]
+owonb35 -R <seconds per measurement> <number of measurements> [<device_address>]
+        Start offline measurement recording
 
+        Client for Owon B35/B35+/B35T+ digital multimeters using bluetooth.
+
+        -i               Interactive remote control
         -s               Timestamp measurements in elapsed seconds from first reading
-        -S               Timestamp measurements in seconds
+        -S               Timestamp measurements in Unix epoch seconds
         -t               Timestamp measurements in elapsed milliseconds from first reading
-        -T               Timestamp measurements in milliseconds
-        -d               Timestamp measurements with date/time
+        -T               Timestamp measurements in Javascript epoch milliseconds
+        -d               Timestamp measurements with ISO date/time
         -c               Comma separated values (CSV) output
         -j               JSON output
         -n               Scale measurements to nano units
@@ -36,9 +40,26 @@ owonb35 [-t|-T] [-c|-j] [-u|-m|-b|-k|-M] [<device_address>]
         -b               Scale measurements to base units
         -k               Scale measurements to kilo units
         -M               Scale measurements to mega units
-        -x               Output just the measurement without the units or type for use with feedgnuplot
+        -x               Output measurement value without units or type for use with feedgnuplot
+        -R               Start offline measurement recording
+        -r               Download offline measurement recording
+        -q               Quiet - no status output
+        -h               Display this help and exit
+        -V               Display version and exit
         <device_address> Address of Owon multimeter to connect
                           otherwise will connect to first meter found if not specified
+
+        Interactive controls:
+                s - Select
+                a - Auto
+                r - Range
+                l - Backlight
+                h - Hold
+                b - Turn off Bluetooth
+                d - Delta (Relative)
+                f - Fequency Hz/Duty
+                m - Min/Max
+                n - Normal display
 ```
 
 You can provide an optional Bluetooth address for the specific multimeter to connect to or the client will otherwise scan for devices and connect to the first multimeter it finds.  Scanning and connection can be a bit flaky at times.  Note that only one client can connect to the multimeter at a time.
@@ -48,6 +69,14 @@ Measurments can be optionally timestamped in actual time or elapsed time since t
 Output format defaults to space seperated values but can also be output in Comma Seperated Values (CSV) or JSON formats.  By default, the measurement unit is output but this can be disabled for feeding applications that can only handle numeric data.
 
 By default, measurements are output in the same scale and resolution as displayed by the multimeter.  When using autoranging, this can result in the measurement scale and resolution changing when the multimeter changes ranges.  To avoid this, you can optionally lock the measurement scale.  However, as the multimeter autoranges, it will change the resolution of the measurement value.
+
+### Interactive Mode
+Specifying the `-i` option allows you to interactively control the multimeter remotely from the client.  Using these controls, you can change the measurement range, switch between some functions, display min/max/relative/hold values, and turn the backligh on.  The interactive controls correspond to the multimeter front panel buttons.
+
+### Offline Recording
+The client can be used to initiate offline recording using the `-R` option.  With this command, specify the measurement interval in seconds per measurement, and the number of measurements to record.  The multimeter has the capacity to store up to 10,000 measurements.
+
+Offline recorded measurements are downloaded using the `-r` option.  Recorded measurements are replayed and output in the same way as realtime measurements.  Timestamp, format and scale options can be used to control the measurement output.
 
 ## Interfacing
 
@@ -83,6 +112,8 @@ JSON format - `omonb35 -T -b -j | mosquitto_pub -t measurement -l`
 ## Protocol
 
 The multimeter uses the Bluetooth Low Energy Generic Attributes [(BLE GATT)](https://www.bluetooth.com/specifications/gatt/generic-attributes-overview) to transmit measurements.
+
+### Realtime Measurements
 
 Measurement data is output as a BLE notification with a 0xfff4 UUID. The packet consists of three uint16_t numbers.
 
@@ -175,5 +206,72 @@ Max--------------\ | | | | |   20
 
 The third number is the measurement digits as a [signed magnitude binary number](https://en.wikipedia.org/wiki/Signed_number_representations#Signed_magnitude_representation) (msb is sign bit). It is converted to the floating point measurement value by using the number of decimal places as specified in the first number.
 
+### Interactive Commands
+Interactive commands are sent by writing a uint16_t number to UUID 0xfff3.
+
+```
+0x0101 Select
+0x0002 Auto
+0x0102 Range
+0x0003 Backlight
+0x0103 Hold
+0x0004 Bluetooth Off
+0x0104 Relative
+0x0105 Hz/Duty
+0x0006 Normal
+0x0106 Min/Max
+```
+
+### Offline Recording
+#### Starting
+Offline recording is initiated by writing the current date and time, and then the measurement interval and count to UUID 0xfff1.  Year of date is split into uint8_t numbers for century and decade/year.
+
+Measurement interval and count are uint32_t numbers.  The maximum number of measurements that can be recorded in 10,000. 
+
+```
+2a:44:41:54:65:14:12:04:0e:11:07:1b:00:00:00:00
+*  D  A  T  e [C][Y] [M][D][H][M][S]
+
+2a:52:45:43:4f:72:64:2c:40:16:40:00:10:27:00:00
+*  R  E  C  O  r  d  ,  [Sec/Rding] [Count    ]
+```
+Once recording has started, the multimeter will disconnect.
 
 
+#### Downloading
+The number of bytes of offline measurement record data available is obtained by the writing the following command and then reading the result from UUID 0xfff1.
+
+```
+2a:52:45:41:44:6c:65:6e:3f:00:00:00:00:00:00:00
+*  R  E  A  D  l  e  n  ?
+```
+
+The result will be a buffer contain a uint32_t number of bytes available.  This number represents the length of data plus a length counter.  The number of measurements available is the (number of bytes/2) - 1.
+
+The downloading of offline measurement data is trigger by writing the following command to UUID 0xfff1.
+
+```
+2a:52:45:41:44:31:3f:00:00:00:00:00:00:00:00:00
+*  R  E  A  D  1  ?
+```
+
+The multimeter sends offline measurement record data using notifications with UUID 0xfff4.  Data is sent in 20 byte packets.
+Int1 and Int3 correspond to the first and third numbers sent in the realtime measurement data above.
+```
+Start marker 
+ff:ff: ff:ff: ff:ff: ff:ff: ff:ff: ff:ff: ff:ff: ff:ff: ff:ff: ff:ff
+
+Header packet
+14:12: 04:0e: 0e:17: 18:00: 02:00 :00:00 :2a:00: 00:00: 19:f0: 09:0e
+[C][Y] [M][D] [H][M] [S]    [Interval  ]  [Byte count ] [Int1] [Int3]
+
+Data packets
+09:0e: 0a:0e: 0a:0e: 0a:0e: 0a:0e: 0b:0e: 0b:0e: 0b:0e: 0b:0e: 0b:0e
+[Int3] [Int3] [Int3] [Int3] [Int3] [Int3] [Int3] [Int3] [Int3] [Int3] 
+
+More data packets as required......
+
+Finish Marker
+ff:ff: ff:ff: ff:ff: ff:ff: ff:ff: ff:ff: ff:ff: ff:ff: ff:ff: ff:ff
+```
+Once the data is downloaded, the mutimeter returns to sending realtime measurement data.
