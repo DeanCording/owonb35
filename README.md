@@ -14,13 +14,16 @@ This client requires the [Gattlib](https://github.com/labapart/gattlib) BLE libr
 
 Either download the [compiled binary](https://github.com/DeanCording/owonb35/releases/) or the source code to compile your own.
 
-Compiling is a simple 'make'.
+Compiling is a simple `make`.
 
 ## Usage
 
 The client is designed to be a simple receiver of measurement data that outputs in formats that can be piped into other tools for processing or display.
 
 ```
+owonb35 [-s|-S|-t|-T|-d] [-c|-j] [-n|-u|-m|-b|-k|-M] [-x] [-r] [-q] [-h|-V] [<device_address>]
+        Measurement collection
+        
 owonb35 -R <seconds per measurement> <number of measurements> [<device_address>]
         Start offline measurement recording
 
