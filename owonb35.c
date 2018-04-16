@@ -37,7 +37,7 @@
 
 #include <gattlib.h>
 
-#define VERSION "1.3.0"
+#define VERSION "1.3.1"
 
 _Bool quiet = FALSE;
 
@@ -845,7 +845,7 @@ int main(int argc, char *argv[]) {
 
             tcgetattr(0, &orig_termios);
             memcpy(&new_termios, &orig_termios, sizeof(new_termios));
-            new_termios.c_lflag &= ~(ECHO | ECHONL |ICANON);
+            new_termios.c_lflag &= ~(ECHO | ECHONL | ICANON);
 
             tcsetattr(0, TCSANOW, &new_termios);
 
@@ -863,6 +863,9 @@ int main(int argc, char *argv[]) {
 
     gattlib_disconnect(connection);
     if (!quiet) fprintf(stderr,"Disconnected\n");
-    tcsetattr(0, TCSANOW, &orig_termios);
+
+    if (interactive)
+        tcsetattr(0, TCSANOW, &orig_termios);
+
     return 0;
 }
