@@ -464,7 +464,7 @@ static void usage(char *argv[]) {
     printf("\t-V\t\t Display version and exit\n");
     printf("\t<device_address> Address of Owon multimeter to connect\n");
     printf("\t\t\t  otherwise will connect to first meter found if not specified\n");
-    printf("\n\n\tInteractive controls:\n");
+    printf("\n\tInteractive controls:\n");
     printf("\t\ts - Select\n");
     printf("\t\ta - Auto\n");
     printf("\t\tr - Range\n");
