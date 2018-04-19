@@ -37,7 +37,7 @@
 
 #include <gattlib.h>
 
-#define VERSION "1.3.1"
+#define VERSION "1.4"
 
 _Bool quiet = FALSE;
 
@@ -99,6 +99,8 @@ int low_battery = FALSE;
 
 unsigned long start_time = 0;
 
+// Watchdog flag
+_Bool active = FALSE;
 
 // Outputs the measurement timestamp
 void print_timestamp() {
@@ -364,6 +366,9 @@ void notification_handler(const uuid_t* uuid, const uint8_t* data, size_t data_l
     uint16_t reading[3];
     int index;
 
+    // Reset watchdog flag
+    active = TRUE;
+
     if (offline) {
         // Process offline recording dump packet
 
@@ -561,6 +566,59 @@ static void ble_discovered_device(const char* addr, const char* name) {
 
 }
 
+
+// Connect to bluetooth multimeter
+void connect_device() {
+
+    do {
+        connection = gattlib_connect(NULL, address, BDADDR_LE_PUBLIC, BT_SEC_LOW, 0, 0);
+        if (connection == NULL) {
+            fprintf(stderr, "Fail to connect to the multimeter bluetooth device.\n");
+            sleep(1);
+        }
+    } while (connection == NULL);
+
+}
+
+// Start the notification listener
+void start_listener() {
+    gattlib_register_notification(connection, notification_handler, NULL);
+
+    int ret = gattlib_notification_start(connection, &g_measurement_uuid);
+    if (ret) {
+        fprintf(stderr, "Fail to start listener.\n");
+        exit(1);
+    }
+}
+
+// Attempt to reconnect to the bluetooth multimeter
+void reconnect_device() {
+
+    gattlib_disconnect(connection);
+    connect_device();
+    start_listener();
+
+}
+
+
+// Connection watchdog
+
+guint timeout_sec = 10;
+
+gboolean watchdog_check(gpointer data) {
+
+    if (!active) {
+        if (!quiet) fprintf(stderr, "Timeout\n");
+
+        reconnect_device();
+
+    }
+
+    active = FALSE;
+
+    return TRUE;
+
+}
 // SIGINT handler for clean shutdown
 void signal_handler(int signal){
 
@@ -727,11 +785,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    connection = gattlib_connect(NULL, address, BDADDR_LE_PUBLIC, BT_SEC_LOW, 0, 0);
-    if (connection == NULL) {
-        fprintf(stderr, "Fail to connect to the multimeter bluetooth device.\n");
-        return 1;
-    }
+    connect_device();
 
     if (interval) {
 
@@ -783,13 +837,7 @@ int main(int argc, char *argv[]) {
 
     } else {
 
-        gattlib_register_notification(connection, notification_handler, NULL);
-
-        ret = gattlib_notification_start(connection, &g_measurement_uuid);
-        if (ret) {
-            fprintf(stderr, "Fail to start listener.\n");
-            return 1;
-        }
+        start_listener();
 
         if (offline) {
             // Request offline recording download
@@ -833,6 +881,8 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
         }
+
+        g_timeout_add_seconds(timeout_sec, watchdog_check, NULL);
 
         loop = g_main_loop_new(NULL, 0);
 
