@@ -37,7 +37,7 @@
 
 #include <gattlib.h>
 
-#define VERSION "1.4"
+#define VERSION "1.4.0"
 
 _Bool quiet = FALSE;
 
@@ -558,7 +558,7 @@ static void ble_discovered_device(const char* addr, const char* name) {
 
     if ((name != NULL) && (strcmp(BDM, name) == 0) && (address == NULL)) {
 
-        if (!quiet) fprintf(stderr, "Connecting to %s\n", addr);
+        if (!quiet) fprintf(stderr, "Found %s\n", addr);
 
         address = malloc(18);
         strcpy(address,addr);
@@ -571,9 +571,10 @@ static void ble_discovered_device(const char* addr, const char* name) {
 void connect_device() {
 
     do {
+        if (!quiet) fprintf(stderr, "Connecting...\n");
         connection = gattlib_connect(NULL, address, BDADDR_LE_PUBLIC, BT_SEC_LOW, 0, 0);
         if (connection == NULL) {
-            fprintf(stderr, "Fail to connect to the multimeter bluetooth device.\n");
+            if (!quiet) fprintf(stderr, "Fail to connect to the multimeter bluetooth device.\n");
             sleep(1);
         }
     } while (connection == NULL);
