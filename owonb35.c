@@ -597,7 +597,7 @@ void reconnect_device() {
 
     gattlib_disconnect(connection);
     connect_device();
-    start_listener();
+    gattlib_register_notification(connection, notification_handler, NULL);
 
 }
 
@@ -612,14 +612,12 @@ gboolean watchdog_check(gpointer data) {
         if (!quiet) fprintf(stderr, "Timeout\n");
 
         reconnect_device();
-
     }
 
     active = FALSE;
-
     return TRUE;
-
 }
+
 // SIGINT handler for clean shutdown
 void signal_handler(int signal){
 
