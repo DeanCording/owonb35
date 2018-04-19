@@ -603,7 +603,7 @@ void reconnect_device() {
 
 // Connection watchdog
 
-guint timeout_sec = 10;
+guint timeout_sec = 5;
 
 gboolean watchdog_check(gpointer data) {
 
