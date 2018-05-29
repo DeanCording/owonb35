@@ -8,7 +8,7 @@ The [Owon B35](http://owontme.com/products_owon_3_5%7C6_digital_multimeter_with_
 
 ## Requirements
 
-This client requires the [Gattlib](https://github.com/labapart/gattlib) BLE library to be installed.  Compiled packages are available to install with needing to compile.
+This client requires the [Gattlib](https://github.com/labapart/gattlib) BLE library to be installed.  Compiled packages are available to install without needing to compile.
 
 ## Installation
 
